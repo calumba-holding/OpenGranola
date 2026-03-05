@@ -49,6 +49,13 @@ struct SettingsView: View {
                     .font(.system(size: 12, design: .monospaced))
             }
 
+            Section("Privacy") {
+                Toggle("Hide from screen sharing", isOn: $settings.hideFromScreenShare)
+                    .font(.system(size: 12))
+                Text("When enabled, the app is invisible during screen sharing and recording.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
 }
         .formStyle(.grouped)
         .frame(width: 450, height: 400)

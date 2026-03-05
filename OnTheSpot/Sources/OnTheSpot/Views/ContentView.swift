@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var transcriptionEngine: TranscriptionEngine?
     @State private var suggestionEngine: SuggestionEngine?
     @State private var sessionStore = SessionStore()
+    @State private var transcriptLogger = TranscriptLogger()
     @State private var overlayManager = OverlayManager()
     @State private var lastThemUtteranceCount = 0
     @State private var isTranscriptExpanded = false
@@ -48,6 +49,18 @@ struct ContentView: View {
                         Text("(\(transcriptStore.utterances.count))")
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    if isTranscriptExpanded && !transcriptStore.utterances.isEmpty {
+                        Button {
+                            copyTranscript()
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy transcript")
                     }
                 }
             }
@@ -146,6 +159,7 @@ struct ContentView: View {
     private func startSession() {
         Task {
             await sessionStore.startSession()
+            await transcriptLogger.startSession()
             await transcriptionEngine?.start(
                 locale: settings.locale,
                 inputDeviceID: settings.inputDeviceID
@@ -155,7 +169,10 @@ struct ContentView: View {
 
     private func stopSession() {
         transcriptionEngine?.stop()
-        Task { await sessionStore.endSession() }
+        Task {
+            await sessionStore.endSession()
+            await transcriptLogger.endSession()
+        }
     }
 
     private func toggleOverlay() {
@@ -188,11 +205,21 @@ struct ContentView: View {
         }
     }
 
+    private func copyTranscript() {
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm:ss"
+        let lines = transcriptStore.utterances.map { u in
+            "[\(timeFmt.string(from: u.timestamp))] \(u.speaker == .you ? "You" : "Them"): \(u.text)"
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+    }
+
     private func handleNewUtterance() {
         let utterances = transcriptStore.utterances
         guard let last = utterances.last else { return }
 
-        // Persist to session store
+        // Persist to session store + transcript log
         Task {
             await sessionStore.appendRecord(SessionRecord(
                 speaker: last.speaker,
@@ -201,6 +228,11 @@ struct ContentView: View {
                 suggestions: nil,
                 kbHits: nil
             ))
+            await transcriptLogger.append(
+                speaker: last.speaker == .you ? "You" : "Them",
+                text: last.text,
+                timestamp: last.timestamp
+            )
         }
 
         // Trigger suggestions on THEM utterance

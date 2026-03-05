@@ -34,15 +34,15 @@ final class SuggestionEngine {
         let apiKey = settings.openRouterApiKey
         guard !apiKey.isEmpty else { return }
 
+        // Search KB first — skip LLM entirely if nothing relevant
+        let kbResults = knowledgeBase.search(query: utterance.text, topK: 5)
+        guard !kbResults.isEmpty else { return }
+
         isGenerating = true
         currentSuggestion = ""
 
         currentTask = Task {
             do {
-                // Search KB
-                let kbResults = knowledgeBase.search(query: utterance.text, topK: 5)
-
-                // Build messages
                 let messages = buildMessages(
                     recentUtterances: transcriptStore.recentUtterances,
                     currentQuery: utterance.text,
@@ -62,11 +62,15 @@ final class SuggestionEngine {
                 }
 
                 if !Task.isCancelled {
-                    let suggestion = Suggestion(
-                        text: accumulated,
-                        kbHits: kbResults
-                    )
-                    suggestions.insert(suggestion, at: 0)
+                    let trimmed = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // LLM outputs "—" when nothing relevant
+                    if !trimmed.isEmpty && trimmed != "—" {
+                        let suggestion = Suggestion(
+                            text: trimmed,
+                            kbHits: kbResults
+                        )
+                        suggestions.insert(suggestion, at: 0)
+                    }
                     currentSuggestion = ""
                 }
             } catch {
@@ -96,20 +100,31 @@ final class SuggestionEngine {
     ) -> [OpenRouterClient.Message] {
         var messages: [OpenRouterClient.Message] = []
 
-        // System prompt
+        // System prompt — KB-focused, high-signal only
         var systemPrompt = """
-        You are a real-time conversation assistant. The user is in a live conversation \
-        and needs concise, actionable talking points based on what the other person just said.
+        You are a real-time meeting assistant. The user has a knowledge base (KB) with \
+        notes, docs, and reference material. Your ONLY job is to surface specific, useful \
+        information FROM the KB that is relevant to what was just said in the conversation.
 
-        Generate 2-3 brief, natural talking points. Be specific and directly relevant. \
-        Each point should be 1-2 sentences max. Use bullet points.
+        Rules:
+        - ONLY output information grounded in the KB excerpts below. No generic advice.
+        - Output 1-4 bullet points max. Each bullet has two parts:
+          • Short headline (≤10 words, the key insight)
+          > One-sentence detail or quote from KB
+        - Types of bullets (pick what fits):
+          - Key facts/numbers from KB relevant right now
+          - Pointed questions to ask, based on KB knowledge
+          - Specific advice or tips from KB to share
+          - Gotchas or caveats mentioned in KB
+        - If nothing in the KB is relevant to the current conversation, output only: —
+        - No filler. No platitudes. No "consider exploring..." style fluff.
+        - Be terse. The user is in a live conversation and glancing at these.
+
+        KB excerpts:
         """
 
-        if !kbResults.isEmpty {
-            systemPrompt += "\n\nRelevant context from the knowledge base:\n"
-            for result in kbResults {
-                systemPrompt += "\n[\(result.sourceFile)]:\n\(result.text)\n"
-            }
+        for result in kbResults {
+            systemPrompt += "\n[\(result.sourceFile)]:\n\(result.text)\n"
         }
 
         messages.append(.init(role: "system", content: systemPrompt))
@@ -127,7 +142,7 @@ final class SuggestionEngine {
         // Current query
         messages.append(.init(
             role: "user",
-            content: "They just said: \"\(currentQuery)\"\n\nGive me talking points to respond with."
+            content: "They just said: \"\(currentQuery)\""
         ))
 
         return messages

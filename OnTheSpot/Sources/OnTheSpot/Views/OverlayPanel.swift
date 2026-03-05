@@ -13,7 +13,10 @@ final class OverlayPanel: NSPanel {
 
         isFloatingPanel = true
         level = .floating
-        sharingType = .none
+        let hidden = UserDefaults.standard.object(forKey: "hideFromScreenShare") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "hideFromScreenShare")
+        sharingType = hidden ? .none : .readOnly
         isMovableByWindowBackground = true
         titlebarAppearsTransparent = true
         titleVisibility = .hidden

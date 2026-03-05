@@ -1,6 +1,9 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
+import os
+
+private let micLog = Logger(subsystem: "com.onthespot", category: "MicCapture")
 
 /// Captures microphone audio via AVAudioEngine and streams PCM buffers.
 final class MicCapture: @unchecked Sendable {
@@ -33,35 +36,34 @@ final class MicCapture: @unchecked Sendable {
         return AsyncStream { continuation in
             errorHolder.value = nil
 
+            diagLog("[MIC-1] bufferStream called, deviceID=\(String(describing: deviceID))")
+
             // Set input device before accessing inputNode format
             if let id = deviceID {
-                do {
-                    let inputNode = self.engine.inputNode
-                    let audioUnit = inputNode.audioUnit!
-                    var devID = id
-                    let status = AudioUnitSetProperty(
-                        audioUnit,
-                        kAudioOutputUnitProperty_CurrentDevice,
-                        kAudioUnitScope_Global,
-                        0,
-                        &devID,
-                        UInt32(MemoryLayout<AudioDeviceID>.size)
-                    )
-                    if status != noErr {
-                        print("MicCapture: failed to set input device (\(status))")
-                    }
-                }
+                let inputNode = self.engine.inputNode
+                let audioUnit = inputNode.audioUnit!
+                var devID = id
+                let status = AudioUnitSetProperty(
+                    audioUnit,
+                    kAudioOutputUnitProperty_CurrentDevice,
+                    kAudioUnitScope_Global,
+                    0,
+                    &devID,
+                    UInt32(MemoryLayout<AudioDeviceID>.size)
+                )
+                diagLog("[MIC-2] setInputDevice status=\(status) (0=ok)")
+            } else {
+                diagLog("[MIC-2] no deviceID, using system default")
             }
 
             let inputNode = self.engine.inputNode
             let format = inputNode.outputFormat(forBus: 0)
 
-            print("MicCapture: input format = \(format)")
-            print("MicCapture: sample rate = \(format.sampleRate), channels = \(format.channelCount)")
+            diagLog("[MIC-3] inputNode format: sr=\(format.sampleRate) ch=\(format.channelCount) interleaved=\(format.isInterleaved) commonFormat=\(format.commonFormat.rawValue)")
 
             guard format.sampleRate > 0 && format.channelCount > 0 else {
                 let msg = "Invalid audio format: sr=\(format.sampleRate) ch=\(format.channelCount)"
-                print("MicCapture: \(msg)")
+                diagLog("[MIC-3-FAIL] \(msg)")
                 errorHolder.value = msg
                 continuation.finish()
                 return
@@ -72,32 +74,43 @@ final class MicCapture: @unchecked Sendable {
                 channels: format.channelCount
             ) else {
                 let msg = "Failed to build tap format from input format"
-                print("MicCapture: \(msg)")
+                diagLog("[MIC-4-FAIL] \(msg)")
                 errorHolder.value = msg
                 continuation.finish()
                 return
             }
 
+            diagLog("[MIC-4] tapFormat: sr=\(tapFormat.sampleRate) ch=\(tapFormat.channelCount)")
+
+            var tapCallCount = 0
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { buffer, _ in
-                // Track a normalized RMS level regardless of source PCM format.
+                tapCallCount += 1
                 let rms = Self.normalizedRMS(from: buffer)
-                level.value = min(rms * 6, 1.0)
+                level.value = min(rms * 25, 1.0)
+
+                if tapCallCount <= 5 || tapCallCount % 100 == 0 {
+                    diagLog("[MIC-6] tap #\(tapCallCount): frames=\(buffer.frameLength) rms=\(rms) level=\(level.value)")
+                }
 
                 continuation.yield(buffer)
             }
 
+            diagLog("[MIC-5] tap installed, preparing engine...")
+
             continuation.onTermination = { [engine] _ in
+                diagLog("[MIC-TERM] stream terminated, stopping engine")
                 engine.inputNode.removeTap(onBus: 0)
                 engine.stop()
             }
 
             do {
                 self.engine.prepare()
+                diagLog("[MIC-7] engine prepared, starting...")
                 try self.engine.start()
-                print("MicCapture: engine started successfully")
+                diagLog("[MIC-8] engine started successfully, isRunning=\(self.engine.isRunning)")
             } catch {
                 let msg = "Mic failed: \(error.localizedDescription)"
-                print("MicCapture: \(msg)")
+                print("[MIC-8-FAIL] \(msg)")
                 errorHolder.value = msg
                 continuation.finish()
             }
@@ -244,6 +257,19 @@ final class MicCapture: @unchecked Sendable {
         }
 
         return result
+    }
+
+    /// Convert a CoreAudio AudioDeviceID to the UID string used by ScreenCaptureKit.
+    static func deviceUID(for deviceID: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uid: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &uid)
+        return status == noErr ? uid as String : nil
     }
 
     static func defaultInputDeviceID() -> AudioDeviceID? {
