@@ -2,8 +2,6 @@
 
 On The Spot is a macOS meeting copilot for live conversations. It listens to your mic and the other side of the call, transcribes both streams in real time, searches your notes, and surfaces grounded talking points while the conversation is happening.
 
-The current app is the SwiftUI macOS app in [`OnTheSpot/`](./OnTheSpot). This repo still contains some older Python prototype files, but the active product and release flow are the Swift app.
-
 ## What It Does
 
 - Captures your microphone and system audio separately during a call
@@ -119,8 +117,8 @@ To build a DMG after building the app:
 
 The GitHub release workflow uses the same Swift build script and then packages `dist/OnTheSpot.dmg`.
 
-## Repo Notes
+## Repo Layout
 
-- `OnTheSpot/` contains the current SwiftUI app
-- `scripts/build_swift_app.sh` is the current build/install path
-- `scripts/build_macos_app.sh` is a legacy packaging path for the older Python prototype and is not used for the current app
+- `OnTheSpot/` — SwiftUI app source (Swift Package)
+- `scripts/build_swift_app.sh` — build, sign, and install
+- `scripts/make_dmg.sh` — package DMG for distribution
