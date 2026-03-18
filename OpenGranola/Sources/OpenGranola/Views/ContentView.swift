@@ -3,14 +3,14 @@ import Combine
 
 struct ContentView: View {
     @Bindable var settings: AppSettings
+    @Environment(AppCoordinator.self) private var coordinator
+    @Environment(\.openWindow) private var openWindow
     @State private var transcriptStore = TranscriptStore()
     @State private var knowledgeBase: KnowledgeBase?
     @State private var transcriptionEngine: TranscriptionEngine?
     @State private var suggestionEngine: SuggestionEngine?
-    @State private var sessionStore = SessionStore()
     @State private var transcriptLogger = TranscriptLogger()
     @State private var overlayManager = OverlayManager()
-    @State private var lastThemUtteranceCount = 0
     @AppStorage("isTranscriptExpanded") private var isTranscriptExpanded = true
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @State private var showOnboarding = false
@@ -22,6 +22,29 @@ struct ContentView: View {
             topBar
 
             Divider()
+
+            // Post-session banner
+            if let lastSession = coordinator.lastEndedSession, lastSession.utteranceCount > 0 {
+                HStack {
+                    Text("Session ended \u{00B7} \(lastSession.utteranceCount) utterances")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        openWindow(id: "notes")
+                    } label: {
+                        Label("Generate Notes", systemImage: "sparkles")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+
+                Divider()
+            }
 
             // Main content: Suggestions
             VStack(alignment: .leading, spacing: 0) {
@@ -146,8 +169,50 @@ struct ContentView: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            Text("OpenGranola")
+            Text("On The Spot")
                 .font(.system(size: 13, weight: .semibold))
+
+            // Template picker
+            @Bindable var coord = coordinator
+            Menu {
+                Button {
+                    coordinator.selectedTemplate = nil
+                } label: {
+                    HStack {
+                        Text("None")
+                        if coordinator.selectedTemplate == nil {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+                Divider()
+                ForEach(coordinator.templateStore.templates) { template in
+                    Button {
+                        coordinator.selectedTemplate = template
+                    } label: {
+                        Label(template.name, systemImage: template.icon)
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    if let template = coordinator.selectedTemplate {
+                        Image(systemName: template.icon)
+                            .font(.system(size: 10))
+                        Text(template.name)
+                            .font(.system(size: 11))
+                    } else {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 10))
+                        Text("Template")
+                            .font(.system(size: 11))
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
 
             Spacer()
 
@@ -224,7 +289,8 @@ struct ContentView: View {
 
     private func startSession() {
         Task {
-            await sessionStore.startSession()
+            suggestionEngine?.clear()
+            await coordinator.startSession(transcriptStore: transcriptStore)
             await transcriptLogger.startSession()
             await transcriptionEngine?.start(
                 locale: settings.locale,
@@ -234,10 +300,12 @@ struct ContentView: View {
     }
 
     private func stopSession() {
-        transcriptionEngine?.stop()
         Task {
-            await sessionStore.endSession()
-            await transcriptLogger.endSession()
+            await coordinator.finalizeSession(
+                transcriptStore: transcriptStore,
+                transcriptionEngine: transcriptionEngine,
+                transcriptLogger: transcriptLogger
+            )
         }
     }
 
@@ -297,29 +365,23 @@ struct ContentView: View {
         if last.speaker == .them {
             suggestionEngine?.onThemUtterance(last)
 
-            // Log session record with decision metadata (delayed to capture pipeline result)
-            Task { @MainActor in
-                // Small delay to let pipeline complete before logging
-                try? await Task.sleep(for: .seconds(5))
-                let decision = suggestionEngine?.lastDecision
-                let latestSuggestion = suggestionEngine?.suggestions.first
-                let record = SessionRecord(
-                    speaker: last.speaker,
-                    text: last.text,
-                    timestamp: last.timestamp,
-                    suggestions: latestSuggestion.map { [$0.text] },
-                    kbHits: latestSuggestion?.kbHits.map { $0.sourceFile },
-                    suggestionDecision: decision,
-                    surfacedSuggestionText: decision?.shouldSurface == true ? latestSuggestion?.text : nil,
-                    conversationStateSummary: transcriptStore.conversationState.shortSummary.isEmpty
-                        ? nil : transcriptStore.conversationState.shortSummary
+            // Delayed write owned by SessionStore (tracks pending writes for drain)
+            let baseRecord = SessionRecord(
+                speaker: last.speaker,
+                text: last.text,
+                timestamp: last.timestamp
+            )
+            Task {
+                await coordinator.sessionStore.appendRecordDelayed(
+                    baseRecord: baseRecord,
+                    suggestionEngine: suggestionEngine,
+                    transcriptStore: transcriptStore
                 )
-                await sessionStore.appendRecord(record)
             }
         } else {
             // Log non-them utterances immediately
             Task {
-                await sessionStore.appendRecord(SessionRecord(
+                await coordinator.sessionStore.appendRecord(SessionRecord(
                     speaker: last.speaker,
                     text: last.text,
                     timestamp: last.timestamp

@@ -177,3 +177,41 @@ struct SessionRecord: Codable {
         self.conversationStateSummary = conversationStateSummary
     }
 }
+
+// MARK: - Meeting Templates & Enhanced Notes
+
+struct MeetingTemplate: Identifiable, Codable, Sendable, Hashable {
+    let id: UUID
+    var name: String
+    var icon: String
+    var systemPrompt: String
+    var isBuiltIn: Bool
+}
+
+struct TemplateSnapshot: Codable, Sendable {
+    let id: UUID
+    let name: String
+    let icon: String
+    let systemPrompt: String
+}
+
+struct EnhancedNotes: Codable, Sendable {
+    let template: TemplateSnapshot
+    let generatedAt: Date
+    let markdown: String
+}
+
+struct SessionIndex: Identifiable, Codable, Sendable {
+    let id: String
+    let startedAt: Date
+    var endedAt: Date?
+    var templateSnapshot: TemplateSnapshot?
+    var title: String?
+    var utteranceCount: Int
+    var hasNotes: Bool
+}
+
+struct SessionSidecar: Codable, Sendable {
+    let index: SessionIndex
+    var notes: EnhancedNotes?
+}

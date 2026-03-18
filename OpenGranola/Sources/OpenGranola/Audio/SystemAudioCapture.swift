@@ -52,6 +52,12 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable, SCStreamDelegate,
         return CaptureStreams(systemAudio: sysStream)
     }
 
+    /// Finish the async stream so consumers exit their for-await loop.
+    /// Call this before stop() when you need a graceful drain.
+    func finishStream() {
+        _sysContinuation.withLock { $0?.finish(); $0 = nil }
+    }
+
     func stop() async {
         try? await _stream.withLock { $0 }?.stopCapture()
         _stream.withLock { $0 = nil }

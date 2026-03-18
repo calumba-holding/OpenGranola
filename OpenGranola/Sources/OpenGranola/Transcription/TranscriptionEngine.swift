@@ -288,6 +288,34 @@ final class TranscriptionEngine {
         }
     }
 
+    /// Gracefully drain buffered audio before stopping.
+    /// Finishes async streams so transcribers flush remaining speech samples,
+    /// then awaits task completion before tearing down audio hardware.
+    func finalize() async {
+        removeDefaultDeviceListener()
+        micKeepAliveTask?.cancel()
+
+        // Finish the async streams — causes StreamingTranscriber.run()
+        // to exit its for-await loop and hit the final speechSamples flush
+        micCapture.finishStream()
+        systemCapture.finishStream()
+
+        // Wait for transcriber tasks to complete (includes final flush)
+        await micTask?.value
+        await sysTask?.value
+
+        // Now safe to tear down audio hardware
+        micCapture.stop()
+        await systemCapture.stop()
+
+        micTask = nil
+        sysTask = nil
+        micKeepAliveTask = nil
+        currentMicDeviceID = 0
+        isRunning = false
+        assetStatus = "Ready"
+    }
+
     func stop() {
         removeDefaultDeviceListener()
         micTask?.cancel()

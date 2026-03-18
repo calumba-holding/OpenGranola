@@ -5,7 +5,12 @@ import Sparkle
 struct SettingsView: View {
     @Bindable var settings: AppSettings
     var updater: SPUUpdater
+    @Environment(AppCoordinator.self) private var coordinator
     @State private var inputDevices: [(id: AudioDeviceID, name: String)] = []
+    @State private var isAddingTemplate = false
+    @State private var newTemplateName = ""
+    @State private var newTemplateIcon = "doc.text"
+    @State private var newTemplatePrompt = ""
 
     var body: some View {
         Form {
@@ -100,9 +105,89 @@ struct SettingsView: View {
                 ))
                 .font(.system(size: 12))
             }
+
+            Section("Meeting Templates") {
+                ForEach(coordinator.templateStore.templates) { template in
+                    HStack {
+                        Image(systemName: template.icon)
+                            .frame(width: 20)
+                            .foregroundStyle(.secondary)
+                        Text(template.name)
+                            .font(.system(size: 12))
+                        Spacer()
+                        if template.isBuiltIn {
+                            Image(systemName: "lock")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                            Button("Reset") {
+                                coordinator.templateStore.resetBuiltIn(id: template.id)
+                            }
+                            .font(.system(size: 11))
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                        } else {
+                            Button {
+                                coordinator.templateStore.delete(id: template.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if isAddingTemplate {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Template Name", text: $newTemplateName)
+                            .font(.system(size: 12))
+                        TextField("SF Symbol (e.g. doc.text)", text: $newTemplateIcon)
+                            .font(.system(size: 12, design: .monospaced))
+                        TextEditor(text: $newTemplatePrompt)
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(height: 100)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(.quaternary)
+                            )
+                        HStack {
+                            Button("Cancel") {
+                                isAddingTemplate = false
+                                newTemplateName = ""
+                                newTemplateIcon = "doc.text"
+                                newTemplatePrompt = ""
+                            }
+                            .buttonStyle(.plain)
+                            Button("Save") {
+                                let template = MeetingTemplate(
+                                    id: UUID(),
+                                    name: newTemplateName,
+                                    icon: newTemplateIcon,
+                                    systemPrompt: newTemplatePrompt,
+                                    isBuiltIn: false
+                                )
+                                coordinator.templateStore.add(template)
+                                isAddingTemplate = false
+                                newTemplateName = ""
+                                newTemplateIcon = "doc.text"
+                                newTemplatePrompt = ""
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(newTemplateName.isEmpty || newTemplatePrompt.isEmpty)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    Button("New Template") {
+                        isAddingTemplate = true
+                    }
+                    .font(.system(size: 12))
+                }
+            }
 }
         .formStyle(.grouped)
-        .frame(width: 450, height: 550)
+        .frame(width: 450, height: 700)
         .onAppear {
             inputDevices = MicCapture.availableInputDevices()
         }

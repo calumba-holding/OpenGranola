@@ -6,11 +6,13 @@ import Sparkle
 struct OpenGranolaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var settings = AppSettings()
+    @State private var coordinator = AppCoordinator()
     private let updaterController = AppUpdaterController()
 
     var body: some Scene {
         WindowGroup {
             ContentView(settings: settings)
+                .environment(coordinator)
                 .onAppear {
                     settings.applyScreenShareVisibility()
                 }
@@ -22,8 +24,16 @@ struct OpenGranolaApp: App {
                 CheckForUpdatesView(updater: updaterController.updater)
             }
         }
+
+        Window("Notes", id: "notes") {
+            NotesView(settings: settings)
+                .environment(coordinator)
+        }
+        .defaultSize(width: 700, height: 550)
+
         Settings {
             SettingsView(settings: settings, updater: updaterController.updater)
+                .environment(coordinator)
         }
     }
 }

@@ -10,6 +10,7 @@ final class MicCapture: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let _audioLevel = AudioLevel()
     private let _error = SyncString()
+    private let _streamContinuation = OSAllocatedUnfairLock<AsyncStream<AVAudioPCMBuffer>.Continuation?>(uncheckedState: nil)
 
     var audioLevel: Float { _audioLevel.value }
     var captureError: String? { _error.value }
@@ -34,6 +35,7 @@ final class MicCapture: @unchecked Sendable {
         let errorHolder = _error
 
         return AsyncStream { continuation in
+            self._streamContinuation.withLock { $0 = continuation }
             errorHolder.value = nil
 
             diagLog("[MIC-1] bufferStream called, deviceID=\(String(describing: deviceID))")
@@ -97,10 +99,10 @@ final class MicCapture: @unchecked Sendable {
 
             diagLog("[MIC-5] tap installed, preparing engine...")
 
-            continuation.onTermination = { [engine] _ in
-                diagLog("[MIC-TERM] stream terminated, stopping engine")
-                engine.inputNode.removeTap(onBus: 0)
-                engine.stop()
+            continuation.onTermination = { _ in
+                diagLog("[MIC-TERM] stream terminated")
+                // Audio hardware teardown handled by stop() — not here,
+                // so finishStream() can drain without premature engine shutdown.
             }
 
             do {
@@ -115,6 +117,12 @@ final class MicCapture: @unchecked Sendable {
                 continuation.finish()
             }
         }
+    }
+
+    /// Finish the async stream so consumers exit their for-await loop.
+    /// Call this before stop() when you need a graceful drain.
+    func finishStream() {
+        _streamContinuation.withLock { $0?.finish(); $0 = nil }
     }
 
     func stop() {
